@@ -154,9 +154,6 @@ export async function onRequest(context) {
   const stickyTarget = getStickyTarget(request);
 
   if (url.pathname === "/" && !target) {
-    if (stickyTarget) {
-      return Response.redirect(buildProxyUrl(stickyTarget, url.origin), 302);
-    }
     return new Response(renderHome(), { headers: HTML_HEADERS });
   }
 
@@ -294,7 +291,7 @@ function getStickyTarget(request) {
   if (!match) return "";
 
   try {
-    return decodeTargetToken(decodeURIComponent(match[1]));
+    return decodeTargetToken(decodeURIComponent(match[1])) || "";
   } catch {
     return "";
   }
