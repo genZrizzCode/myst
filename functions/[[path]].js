@@ -5,18 +5,170 @@ const HTML_HEADERS = {
 };
 
 const SAFE_PROTOCOLS = new Set(["http:", "https:"]);
+const STICKY_TARGET_COOKIE = "myst_target";
+const TARGET_TOKEN_PREFIX = "x1.";
+const TARGET_TOKEN_SECRET = "myst-raincloud-v1";
+const PROXY_BRIDGE_SCRIPT = `(() => {
+  const cookieName = ${JSON.stringify(STICKY_TARGET_COOKIE)};
+  const tokenPrefix = ${JSON.stringify(TARGET_TOKEN_PREFIX)};
+  const tokenSecret = ${JSON.stringify(TARGET_TOKEN_SECRET)};
+
+  const fnv1a32 = (bytes) => {
+    let hash = 0x811c9dc5;
+    for (const byte of bytes) {
+      hash ^= byte;
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash >>> 0;
+  };
+
+  const xorshift32 = (value) => {
+    let x = value >>> 0;
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return x >>> 0;
+  };
+
+  const u32ToBytes = (value) => new Uint8Array([
+    (value >>> 24) & 255,
+    (value >>> 16) & 255,
+    (value >>> 8) & 255,
+    value & 255,
+  ]);
+
+  const base64UrlEncode = (bytes) => {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+  };
+
+  const encodeTarget = (value) => {
+    const bytes = new TextEncoder().encode(String(value));
+    const keyBytes = new TextEncoder().encode(tokenSecret);
+    const seed = fnv1a32(keyBytes);
+    const output = new Uint8Array(bytes.length + 4);
+    output.set(u32ToBytes(seed), 0);
+
+    let state = seed;
+    for (let i = 0; i < bytes.length; i += 1) {
+      state = xorshift32(state);
+      output[i + 4] = bytes[i] ^ (state & 255);
+    }
+
+    return tokenPrefix + base64UrlEncode(output);
+  };
+
+  const readCookie = (name) => {
+    const match = document.cookie.match(new RegExp("(^|; )" + name + "=([^;]*)"));
+    return match ? decodeURIComponent(match[2]) : "";
+  };
+
+  const writeCookie = (name, value) => {
+    document.cookie = name + "=" + encodeURIComponent(value) + "; Path=/; SameSite=Lax";
+  };
+
+  const current = new URL(location.href);
+  const fromQuery = current.searchParams.get("t");
+  if (fromQuery) {
+    sessionStorage.setItem(cookieName, fromQuery);
+    writeCookie(cookieName, fromQuery);
+  }
+
+  const storedTarget = () => current.searchParams.get("t") || sessionStorage.getItem(cookieName) || readCookie(cookieName);
+
+  const resolveTarget = (input) => {
+    const target = storedTarget();
+    if (!target) return null;
+    try {
+      return new URL(input, target).toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const proxify = (input) => {
+    const resolved = resolveTarget(input);
+    return resolved ? "/p?t=" + encodeURIComponent(encodeTarget(resolved)) : input;
+  };
+
+  const originalPushState = history.pushState.bind(history);
+  const originalReplaceState = history.replaceState.bind(history);
+
+  history.pushState = function(state, title, url) {
+    if (typeof url === "string" && url.length) {
+      return originalPushState(state, title, proxify(url));
+    }
+    return originalPushState(state, title, url);
+  };
+
+  history.replaceState = function(state, title, url) {
+    if (typeof url === "string" && url.length) {
+      return originalReplaceState(state, title, proxify(url));
+    }
+    return originalReplaceState(state, title, url);
+  };
+
+  addEventListener("click", (event) => {
+    const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+
+    const href = anchor.getAttribute("href");
+    if (!href || href.startsWith("#") || /^(javascript:|mailto:|tel:|data:)/i.test(href)) return;
+
+    const proxied = proxify(href);
+    if (proxied === href) return;
+
+    event.preventDefault();
+    location.assign(proxied);
+  }, true);
+
+  addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!form || form.tagName !== "FORM") return;
+
+    const action = form.getAttribute("action") || location.pathname + location.search;
+    const proxiedAction = proxify(action);
+    if (proxiedAction === action) return;
+
+    const method = (form.getAttribute("method") || "get").toUpperCase();
+    if (method === "GET") {
+      event.preventDefault();
+      const url = new URL(proxiedAction, location.href);
+      const params = new URLSearchParams(new FormData(form));
+      for (const [key, value] of params.entries()) {
+        url.searchParams.append(key, value);
+      }
+      location.assign(url.toString());
+      return;
+    }
+
+    form.action = proxiedAction;
+  }, true);
+})();`;
 
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
   const target = getTargetFromUrl(url);
+  const stickyTarget = getStickyTarget(request);
 
   if (url.pathname === "/" && !target) {
+    if (stickyTarget) {
+      return Response.redirect(buildProxyUrl(stickyTarget, url.origin), 302);
+    }
     return new Response(renderHome(), { headers: HTML_HEADERS });
   }
 
   if (url.pathname === "/p" || url.pathname === "/proxy" || (url.pathname === "/" && target)) {
     return handleProxy(request, url, target);
+  }
+
+  if (!target && stickyTarget) {
+    const fallbackTarget = resolveFallbackTarget(url, stickyTarget);
+    if (fallbackTarget) {
+      return Response.redirect(buildProxyUrl(fallbackTarget, url.origin), 302);
+    }
   }
 
   return new Response(renderNotFound(), {
@@ -26,7 +178,9 @@ export async function onRequest(context) {
 }
 
 function getTargetFromUrl(pageUrl) {
-  return pageUrl.searchParams.get("t") || pageUrl.searchParams.get("url");
+  const value = pageUrl.searchParams.get("t") || pageUrl.searchParams.get("url");
+  if (!value) return null;
+  return decodeTargetToken(value);
 }
 
 async function handleProxy(request, pageUrl, targetInput) {
@@ -111,10 +265,39 @@ function resolveAndProxyUrl(location, baseUrl, origin) {
     return origin;
   }
 
-  const proxyUrl = new URL("/proxy", origin);
-  proxyUrl.pathname = "/p";
-  proxyUrl.searchParams.set("t", resolved.toString());
+  return buildProxyUrl(resolved.toString(), origin);
+}
+
+function buildProxyUrl(target, origin) {
+  const proxyUrl = new URL("/p", origin);
+  proxyUrl.searchParams.set("t", encodeTargetToken(target));
   return proxyUrl.toString();
+}
+
+function resolveFallbackTarget(requestUrl, stickyTarget) {
+  try {
+    const base = new URL(stickyTarget);
+    if (!SAFE_PROTOCOLS.has(base.protocol)) {
+      return null;
+    }
+
+    const candidate = new URL(requestUrl.pathname + requestUrl.search + requestUrl.hash, base.origin);
+    return candidate.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getStickyTarget(request) {
+  const cookie = request.headers.get("cookie") || "";
+  const match = cookie.match(new RegExp(`(?:^|; )${STICKY_TARGET_COOKIE}=([^;]*)`));
+  if (!match) return "";
+
+  try {
+    return decodeTargetToken(decodeURIComponent(match[1]));
+  } catch {
+    return "";
+  }
 }
 
 async function rewriteResponse(response, targetUrl, origin) {
@@ -127,7 +310,9 @@ async function rewriteResponse(response, targetUrl, origin) {
     headers.delete("content-length");
     headers.delete("content-encoding");
     headers.delete("transfer-encoding");
+    headers.append("set-cookie", `${STICKY_TARGET_COOKIE}=${encodeURIComponent(encodeTargetToken(targetUrl.toString()))}; Path=/; SameSite=Lax`);
     const rewriter = new HTMLRewriter()
+      .on("head", new HeadScriptInjector())
       .on("a[href]", new AttributeRewriter("href", targetUrl, origin))
       .on("area[href]", new AttributeRewriter("href", targetUrl, origin))
       .on("link[href]", new AttributeRewriter("href", targetUrl, origin))
@@ -155,12 +340,14 @@ async function rewriteResponse(response, targetUrl, origin) {
     headers.delete("content-length");
     headers.delete("content-encoding");
     headers.delete("transfer-encoding");
+    headers.append("set-cookie", `${STICKY_TARGET_COOKIE}=${encodeURIComponent(encodeTargetToken(targetUrl.toString()))}; Path=/; SameSite=Lax`);
     return new Response(rewritten, {
       status: response.status,
       headers,
     });
   }
 
+  headers.append("set-cookie", `${STICKY_TARGET_COOKIE}=${encodeURIComponent(encodeTargetToken(targetUrl.toString()))}; Path=/; SameSite=Lax`);
   return new Response(response.body, {
     status: response.status,
     headers,
@@ -275,6 +462,14 @@ class InlineStyleRewriter {
     if (!style) return;
 
     element.setAttribute("style", rewriteCss(style, this.baseUrl, this.origin));
+  }
+}
+
+class HeadScriptInjector {
+  element(element) {
+    element.append(`<script>${escapeScript(PROXY_BRIDGE_SCRIPT)}</script>`, {
+      html: true,
+    });
   }
 }
 
@@ -492,4 +687,103 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function escapeScript(value) {
+  return String(value)
+    .replace(/<\/script/gi, "<\\/script")
+    .replace(/<!--/g, "<\\!--");
+}
+
+function encodeTargetToken(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  const keyBytes = new TextEncoder().encode(TARGET_TOKEN_SECRET);
+  const seed = fnv1a32(keyBytes);
+  const obfuscated = new Uint8Array(bytes.length + 4);
+  obfuscated.set(u32ToBytes(seed), 0);
+
+  let state = seed;
+  for (let i = 0; i < bytes.length; i += 1) {
+    state = xorshift32(state);
+    obfuscated[i + 4] = bytes[i] ^ (state & 0xff);
+  }
+
+  return TARGET_TOKEN_PREFIX + base64UrlEncode(obfuscated);
+}
+
+function decodeTargetToken(value) {
+  if (typeof value !== "string") return null;
+  if (!value.startsWith(TARGET_TOKEN_PREFIX)) {
+    return value;
+  }
+
+  try {
+    const bytes = base64UrlDecode(value.slice(TARGET_TOKEN_PREFIX.length));
+    if (bytes.length < 5) return null;
+
+    const seed = bytesToU32(bytes.slice(0, 4));
+    let state = seed;
+    const decoded = new Uint8Array(bytes.length - 4);
+    for (let i = 4; i < bytes.length; i += 1) {
+      state = xorshift32(state);
+      decoded[i - 4] = bytes[i] ^ (state & 0xff);
+    }
+
+    return new TextDecoder().decode(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function fnv1a32(bytes) {
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function xorshift32(value) {
+  let x = value >>> 0;
+  x ^= x << 13;
+  x ^= x >>> 17;
+  x ^= x << 5;
+  return x >>> 0;
+}
+
+function u32ToBytes(value) {
+  return new Uint8Array([
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  ]);
+}
+
+function bytesToU32(bytes) {
+  return (
+    ((bytes[0] << 24) >>> 0) |
+    (bytes[1] << 16) |
+    (bytes[2] << 8) |
+    bytes[3]
+  ) >>> 0;
+}
+
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
