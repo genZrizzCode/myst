@@ -516,7 +516,7 @@ function renderHome() {
       text-transform: uppercase;
       font-size: 0.78rem;
       color: var(--accent2);
-      margin: 0 0 12px;
+      margin: 0 0 -10px;
     }
     h1 {
       margin: 0;
