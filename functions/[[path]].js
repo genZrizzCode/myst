@@ -611,7 +611,7 @@ function renderHome() {
           const base64UrlEncode = (bytes) => {
             let binary = "";
             for (const byte of bytes) binary += String.fromCharCode(byte);
-            return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+            return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
           };
 
           const encodeTarget = (value) => {
