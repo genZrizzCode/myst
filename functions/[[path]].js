@@ -9,13 +9,14 @@ const SAFE_PROTOCOLS = new Set(["http:", "https:"]);
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
+  const target = getTargetFromUrl(url);
 
-  if (url.pathname === "/" && !url.searchParams.has("url")) {
+  if (url.pathname === "/" && !target) {
     return new Response(renderHome(), { headers: HTML_HEADERS });
   }
 
-  if (url.pathname === "/proxy" || (url.pathname === "/" && url.searchParams.has("url"))) {
-    return handleProxy(request, url);
+  if (url.pathname === "/p" || url.pathname === "/proxy" || (url.pathname === "/" && target)) {
+    return handleProxy(request, url, target);
   }
 
   return new Response(renderNotFound(), {
@@ -24,8 +25,11 @@ export async function onRequest(context) {
   });
 }
 
-async function handleProxy(request, pageUrl) {
-  const targetInput = pageUrl.searchParams.get("url");
+function getTargetFromUrl(pageUrl) {
+  return pageUrl.searchParams.get("t") || pageUrl.searchParams.get("url");
+}
+
+async function handleProxy(request, pageUrl, targetInput) {
   if (!targetInput) {
     return new Response(renderError("Enter a site to open."), {
       status: 400,
@@ -108,7 +112,8 @@ function resolveAndProxyUrl(location, baseUrl, origin) {
   }
 
   const proxyUrl = new URL("/proxy", origin);
-  proxyUrl.searchParams.set("url", resolved.toString());
+  proxyUrl.pathname = "/p";
+  proxyUrl.searchParams.set("t", resolved.toString());
   return proxyUrl.toString();
 }
 
@@ -412,9 +417,9 @@ function renderHome() {
       <p class="subtitle">
         A lightweight browser-based tunnel for websites. Paste a URL, and myst will fetch and rewrite it so you can browse through Cloudflare Pages Functions.
       </p>
-      <form action="/proxy" method="get">
+      <form action="/p" method="get">
         <input
-          name="url"
+          name="t"
           type="url"
           placeholder="https://example.com"
           autocomplete="url"
