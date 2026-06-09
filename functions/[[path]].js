@@ -6,36 +6,10 @@ const HTML_HEADERS = {
 
 const SAFE_PROTOCOLS = new Set(["http:", "https:"]);
 const STICKY_TARGET_COOKIE = "myst_target";
-const TARGET_TOKEN_PREFIX = "x1.";
-const TARGET_TOKEN_SECRET = "myst-raincloud-v1";
+const TARGET_TOKEN_PREFIX = "b64.";
 const PROXY_BRIDGE_SCRIPT = `(() => {
   const cookieName = ${JSON.stringify(STICKY_TARGET_COOKIE)};
   const tokenPrefix = ${JSON.stringify(TARGET_TOKEN_PREFIX)};
-  const tokenSecret = ${JSON.stringify(TARGET_TOKEN_SECRET)};
-
-  const fnv1a32 = (bytes) => {
-    let hash = 0x811c9dc5;
-    for (const byte of bytes) {
-      hash ^= byte;
-      hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash >>> 0;
-  };
-
-  const xorshift32 = (value) => {
-    let x = value >>> 0;
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    return x >>> 0;
-  };
-
-  const u32ToBytes = (value) => new Uint8Array([
-    (value >>> 24) & 255,
-    (value >>> 16) & 255,
-    (value >>> 8) & 255,
-    value & 255,
-  ]);
 
   const base64UrlEncode = (bytes) => {
     let binary = "";
@@ -43,20 +17,24 @@ const PROXY_BRIDGE_SCRIPT = `(() => {
     return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
   };
 
-  const encodeTarget = (value) => {
-    const bytes = new TextEncoder().encode(String(value));
-    const keyBytes = new TextEncoder().encode(tokenSecret);
-    const seed = fnv1a32(keyBytes);
-    const output = new Uint8Array(bytes.length + 4);
-    output.set(u32ToBytes(seed), 0);
+  const base64UrlDecode = (value) => {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  };
 
-    let state = seed;
-    for (let i = 0; i < bytes.length; i += 1) {
-      state = xorshift32(state);
-      output[i + 4] = bytes[i] ^ (state & 255);
+  const encodeTarget = (value) => tokenPrefix + base64UrlEncode(new TextEncoder().encode(String(value)));
+
+  const decodeTarget = (value) => {
+    if (!value) return "";
+    if (!value.startsWith(tokenPrefix)) return value;
+    try {
+      return new TextDecoder().decode(base64UrlDecode(value.slice(tokenPrefix.length)));
+    } catch {
+      return "";
     }
-
-    return tokenPrefix + base64UrlEncode(output);
   };
 
   const readCookie = (name) => {
@@ -69,13 +47,13 @@ const PROXY_BRIDGE_SCRIPT = `(() => {
   };
 
   const current = new URL(location.href);
-  const fromQuery = current.searchParams.get("t");
+  const fromQuery = decodeTarget(current.searchParams.get("t"));
   if (fromQuery) {
     sessionStorage.setItem(cookieName, fromQuery);
     writeCookie(cookieName, fromQuery);
   }
 
-  const storedTarget = () => current.searchParams.get("t") || sessionStorage.getItem(cookieName) || readCookie(cookieName);
+  const storedTarget = () => fromQuery || sessionStorage.getItem(cookieName) || readCookie(cookieName);
 
   const resolveTarget = (input) => {
     const target = storedTarget();
@@ -609,10 +587,10 @@ function renderHome() {
       <p class="subtitle">
         A lightweight browser-based tunnel for websites. Paste a URL, and myst will fetch and rewrite it so you can browse through Cloudflare Pages Functions.
       </p>
-      <form action="/p" method="get">
+      <form id="proxy-form" action="/p" method="get">
         <input
-          name="t"
-          type="url"
+          id="site-input"
+          type="text"
           placeholder="https://example.com"
           autocomplete="url"
           inputmode="url"
@@ -622,36 +600,11 @@ function renderHome() {
       </form>
       <script>
         (() => {
-          const form = document.querySelector('form[action="/p"]');
-          const input = form && form.querySelector('input[name="t"]');
+          const form = document.getElementById('proxy-form');
+          const input = document.getElementById('site-input');
           if (!form || !input) return;
 
           const tokenPrefix = ${JSON.stringify(TARGET_TOKEN_PREFIX)};
-          const tokenSecret = ${JSON.stringify(TARGET_TOKEN_SECRET)};
-
-          const fnv1a32 = (bytes) => {
-            let hash = 0x811c9dc5;
-            for (const byte of bytes) {
-              hash ^= byte;
-              hash = Math.imul(hash, 0x01000193) >>> 0;
-            }
-            return hash >>> 0;
-          };
-
-          const xorshift32 = (value) => {
-            let x = value >>> 0;
-            x ^= x << 13;
-            x ^= x >>> 17;
-            x ^= x << 5;
-            return x >>> 0;
-          };
-
-          const u32ToBytes = (value) => new Uint8Array([
-            (value >>> 24) & 255,
-            (value >>> 16) & 255,
-            (value >>> 8) & 255,
-            value & 255,
-          ]);
 
           const base64UrlEncode = (bytes) => {
             let binary = "";
@@ -661,24 +614,14 @@ function renderHome() {
 
           const encodeTarget = (value) => {
             const bytes = new TextEncoder().encode(String(value));
-            const keyBytes = new TextEncoder().encode(tokenSecret);
-            const seed = fnv1a32(keyBytes);
-            const output = new Uint8Array(bytes.length + 4);
-            output.set(u32ToBytes(seed), 0);
-
-            let state = seed;
-            for (let i = 0; i < bytes.length; i += 1) {
-              state = xorshift32(state);
-              output[i + 4] = bytes[i] ^ (state & 255);
-            }
-
-            return tokenPrefix + base64UrlEncode(output);
+            return tokenPrefix + base64UrlEncode(bytes);
           };
 
-          form.addEventListener('submit', () => {
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
             const raw = input.value.trim();
             if (!raw) return;
-            input.value = encodeTarget(raw);
+            location.assign('/p?t=' + encodeURIComponent(encodeTarget(raw)));
           });
         })();
       </script>
@@ -778,55 +721,10 @@ function decodeTargetToken(value) {
 
   try {
     const bytes = base64UrlDecode(value.slice(TARGET_TOKEN_PREFIX.length));
-    if (bytes.length < 5) return null;
-
-    const seed = bytesToU32(bytes.slice(0, 4));
-    let state = seed;
-    const decoded = new Uint8Array(bytes.length - 4);
-    for (let i = 4; i < bytes.length; i += 1) {
-      state = xorshift32(state);
-      decoded[i - 4] = bytes[i] ^ (state & 0xff);
-    }
-
-    return new TextDecoder().decode(decoded);
+    return new TextDecoder().decode(bytes);
   } catch {
     return null;
   }
-}
-
-function fnv1a32(bytes) {
-  let hash = 0x811c9dc5;
-  for (const byte of bytes) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-function xorshift32(value) {
-  let x = value >>> 0;
-  x ^= x << 13;
-  x ^= x >>> 17;
-  x ^= x << 5;
-  return x >>> 0;
-}
-
-function u32ToBytes(value) {
-  return new Uint8Array([
-    (value >>> 24) & 0xff,
-    (value >>> 16) & 0xff,
-    (value >>> 8) & 0xff,
-    value & 0xff,
-  ]);
-}
-
-function bytesToU32(bytes) {
-  return (
-    ((bytes[0] << 24) >>> 0) |
-    (bytes[1] << 16) |
-    (bytes[2] << 8) |
-    bytes[3]
-  ) >>> 0;
 }
 
 function base64UrlEncode(bytes) {
