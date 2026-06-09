@@ -699,18 +699,7 @@ function escapeScript(value) {
 
 function encodeTargetToken(value) {
   const bytes = new TextEncoder().encode(String(value));
-  const keyBytes = new TextEncoder().encode(TARGET_TOKEN_SECRET);
-  const seed = fnv1a32(keyBytes);
-  const obfuscated = new Uint8Array(bytes.length + 4);
-  obfuscated.set(u32ToBytes(seed), 0);
-
-  let state = seed;
-  for (let i = 0; i < bytes.length; i += 1) {
-    state = xorshift32(state);
-    obfuscated[i + 4] = bytes[i] ^ (state & 0xff);
-  }
-
-  return TARGET_TOKEN_PREFIX + base64UrlEncode(obfuscated);
+  return TARGET_TOKEN_PREFIX + base64UrlEncode(bytes);
 }
 
 function decodeTargetToken(value) {
