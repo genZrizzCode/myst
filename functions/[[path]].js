@@ -456,6 +456,9 @@ function renderHome() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>myst</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Michroma&display=swap" rel="stylesheet" />
   <style>
     :root {
       color-scheme: dark;
@@ -513,6 +516,7 @@ function renderHome() {
     }
     h1 {
       margin: 0;
+      font-family: "Michroma", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-size: clamp(3rem, 10vw, 5.8rem);
       line-height: 0.92;
       letter-spacing: -0.06em;
