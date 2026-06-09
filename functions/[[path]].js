@@ -596,12 +596,14 @@ function renderHome() {
           inputmode="url"
           required
         />
+        <input id="encoded-target" name="t" type="hidden" />
         <button type="submit">Open site</button>
       </form>
       <script>
         (() => {
           const form = document.getElementById('proxy-form');
           const input = document.getElementById('site-input');
+          const encodedTarget = document.getElementById('encoded-target');
           if (!form || !input) return;
 
           const tokenPrefix = ${JSON.stringify(TARGET_TOKEN_PREFIX)};
@@ -617,11 +619,9 @@ function renderHome() {
             return tokenPrefix + base64UrlEncode(bytes);
           };
 
-          form.addEventListener('submit', (event) => {
-            event.preventDefault();
+          form.addEventListener('submit', () => {
             const raw = input.value.trim();
-            if (!raw) return;
-            location.assign('/p?t=' + encodeURIComponent(encodeTarget(raw)));
+            encodedTarget.value = raw ? encodeTarget(raw) : "";
           });
         })();
       </script>
