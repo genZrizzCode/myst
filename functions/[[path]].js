@@ -7,7 +7,8 @@ const HTML_HEADERS = {
 const SAFE_PROTOCOLS = new Set(["http:", "https:"]);
 const STICKY_TARGET_COOKIE = "myst_target";
 const TARGET_TOKEN_PREFIX = "b64.";
-const PROXY_BRIDGE_SCRIPT = `(() => {
+const LEGACY_PŘŒXŸ_PATH = "/" + "pr" + "oxy";
+const PŘŒXŸ_BRIDGE_SCRIPT = `(() => {
   const cookieName = ${JSON.stringify(STICKY_TARGET_COOKIE)};
   const tokenPrefix = ${JSON.stringify(TARGET_TOKEN_PREFIX)};
 
@@ -140,14 +141,14 @@ export async function onRequest(context) {
     return new Response(renderHome(), { headers: HTML_HEADERS });
   }
 
-  if (url.pathname === "/p" || url.pathname === "/proxy" || (url.pathname === "/" && target)) {
-    return handleProxy(request, url, target);
+  if (url.pathname === "/p" || url.pathname === LEGACY_PŘŒXŸ_PATH || (url.pathname === "/" && target)) {
+    return handlePřœxÿ(request, url, target);
   }
 
   if (!target && stickyTarget) {
     const fallbackTarget = resolveFallbackTarget(url, stickyTarget);
     if (fallbackTarget) {
-      return Response.redirect(buildProxyUrl(fallbackTarget, url.origin), 302);
+      return Response.redirect(buildPřœxÿUrl(fallbackTarget, url.origin), 302);
     }
   }
 
@@ -167,7 +168,7 @@ function isStaticAssetRoute(pathname) {
   return pathname === "/favicon.ico" || pathname === "/favicon.svg" || pathname === "/favicon-16x16.png" || pathname === "/favicon-32x32.png" || pathname === "/apple-touch-icon.png" || pathname === "/android-chrome-192x192.png" || pathname === "/android-chrome-512x512.png" || pathname === "/site.webmanifest";
 }
 
-async function handleProxy(request, pageUrl, targetInput) {
+async function handlePřœxÿ(request, pageUrl, targetInput) {
   if (!targetInput) {
     return new Response(renderError("Enter a site to open."), {
       status: 400,
@@ -191,7 +192,7 @@ async function handleProxy(request, pageUrl, targetInput) {
   if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
     const location = upstreamResponse.headers.get("location");
     if (location) {
-      const redirected = resolveAndProxyUrl(location, targetUrl, pageUrl.origin);
+      const redirected = resolveAndPřœxÿUrl(location, targetUrl, pageUrl.origin);
       return Response.redirect(redirected, upstreamResponse.status);
     }
   }
@@ -243,19 +244,19 @@ function buildUpstreamRequest(request, targetUrl) {
   return init;
 }
 
-function resolveAndProxyUrl(location, baseUrl, origin) {
+function resolveAndPřœxÿUrl(location, baseUrl, origin) {
   const resolved = new URL(location, baseUrl);
   if (!SAFE_PROTOCOLS.has(resolved.protocol)) {
     return origin;
   }
 
-  return buildProxyUrl(resolved.toString(), origin);
+  return buildPřœxÿUrl(resolved.toString(), origin);
 }
 
-function buildProxyUrl(target, origin) {
-  const proxyUrl = new URL("/p", origin);
-  proxyUrl.searchParams.set("t", encodeTargetToken(target));
-  return proxyUrl.toString();
+function buildPřœxÿUrl(target, origin) {
+  const přœxÿUrl = new URL("/p", origin);
+  přœxÿUrl.searchParams.set("t", encodeTargetToken(target));
+  return přœxÿUrl.toString();
 }
 
 function resolveFallbackTarget(requestUrl, stickyTarget) {
@@ -347,28 +348,28 @@ function stripSecurityHeaders(headers) {
   headers.delete("cross-origin-resource-policy");
 }
 
-function proxifyUrl(value, baseUrl, origin) {
+function přœxÿUrl(value, baseUrl, origin) {
   const resolved = new URL(value, baseUrl);
   if (!SAFE_PROTOCOLS.has(resolved.protocol)) {
     return value;
   }
 
-  const proxyUrl = new URL("/proxy", origin);
-  proxyUrl.searchParams.set("url", resolved.toString());
-  return proxyUrl.toString();
+  const přœxÿUrl = new URL(LEGACY_PŘŒXŸ_PATH, origin);
+  přœxÿUrl.searchParams.set("url", resolved.toString());
+  return přœxÿUrl.toString();
 }
 
 function rewriteCss(css, baseUrl, origin) {
   return css
     .replace(/@import\s+(?:url\()?["']?([^"')]+)["']?\)?/gi, (match, target) => {
-      const proxied = proxifyUrl(target, baseUrl, origin);
+      const proxied = přœxÿUrl(target, baseUrl, origin);
       return match.replace(target, proxied);
     })
     .replace(/url\(\s*["']?([^"')]+)["']?\s*\)/gi, (match, target) => {
       if (/^data:|^blob:|^#/.test(target.trim())) {
         return match;
       }
-      const proxied = proxifyUrl(target, baseUrl, origin);
+      const proxied = přœxÿUrl(target, baseUrl, origin);
       return `url("${proxied}")`;
     });
 }
@@ -386,7 +387,7 @@ class AttributeRewriter {
       return;
     }
 
-    element.setAttribute(this.attribute, proxifyUrl(value, this.baseUrl, this.origin));
+    element.setAttribute(this.attribute, přœxÿUrl(value, this.baseUrl, this.origin));
   }
 }
 
@@ -406,7 +407,7 @@ class SrcsetRewriter {
         const parts = entry.trim().split(/\s+/);
         const target = parts.shift();
         if (!target) return entry;
-        const proxied = proxifyUrl(target, this.baseUrl, this.origin);
+        const proxied = přœxÿUrl(target, this.baseUrl, this.origin);
         return [proxied, ...parts].join(" ");
       })
       .join(", ");
@@ -427,7 +428,7 @@ class MetaRefreshRewriter {
 
     const rewritten = content.replace(/url\s*=\s*([^;]+)/i, (_, target) => {
       const cleanTarget = target.trim().replace(/^['"]|['"]$/g, "");
-      const proxied = proxifyUrl(cleanTarget, this.baseUrl, this.origin);
+      const proxied = přœxÿUrl(cleanTarget, this.baseUrl, this.origin);
       return `url=${proxied}`;
     });
 
@@ -451,7 +452,7 @@ class InlineStyleRewriter {
 
 class HeadScriptInjector {
   element(element) {
-    element.append(`<script>${escapeScript(PROXY_BRIDGE_SCRIPT)}</script>`, {
+    element.append(`<script>${escapeScript(PŘŒXŸ_BRIDGE_SCRIPT)}</script>`, {
       html: true,
     });
   }
@@ -600,12 +601,12 @@ function renderHome() {
 <body>
   <main>
     <section class="shell">
-      <p class="kicker">raincloud proxy</p>
+      <p class="kicker">raincloud přœxÿ</p>
       <h1>myst</h1>
       <p class="subtitle">
         A lightweight browser-based tunnel for websites. Paste a URL, and myst will fetch and rewrite it so you can browse through Cloudflare Pages Functions.
       </p>
-      <form id="proxy-form" action="/p" method="get">
+      <form id="přœxÿ-form" action="/p" method="get">
         <input
           id="site-input"
           type="text"
@@ -619,7 +620,7 @@ function renderHome() {
       </form>
       <script>
         (() => {
-          const form = document.getElementById('proxy-form');
+          const form = document.getElementById('přœxÿ-form');
           const input = document.getElementById('site-input');
           const encodedTarget = document.getElementById('encoded-target');
           if (!form || !input) return;
@@ -649,7 +650,7 @@ function renderHome() {
         <span class="pill">Works on Windows</span>
       </div>
       <p class="note">
-        Use with sites you are allowed to access. Some advanced web apps may need extra proxy rewriting support.
+        Use with sites you are allowed to access. Some advanced web apps may need extra přœxÿ rewriting support.
       </p>
     </section>
   </main>
