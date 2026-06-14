@@ -462,6 +462,7 @@ function renderHome() {
   return `<!doctype html>
 <html lang="en">
 <head>
+  <meta name="google-site-verification" content="0GBqW912PjymeSt2O2_bGW7Nsxj-xF3eZMiJbMJLT_k" />
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
